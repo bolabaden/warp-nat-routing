@@ -1,0 +1,58 @@
+[Unit]
+Description=Cloudflare WARP Network Service
+Documentation=https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/install-and-setup/installation/
+After=docker.service network-online.target
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=root
+Group=root
+
+# Environment variables for WARP configuration (all optional)
+Environment=WARP_SLEEP=2
+Environment=WARP_DISABLE_IPV6=1
+# Optional: Uncomment and set these if you have WARP Teams credentials:
+# Environment=WARP_LICENSE_KEY=your_license_key_here
+# Environment=WARP_TUNNEL_TOKEN=your_tunnel_token_here
+
+# Working directory
+WorkingDirectory=/usr/local/bin
+
+# ExecStart - Start the WARP service
+ExecStart=/bin/bash -c 'set -e; echo "Starting WARP service at $(date)" | logger -t warp-service; if /usr/local/bin/warp-up.sh 2>&1 | logger -t warp-service; then echo "WARP service started successfully at $(date)" | logger -t warp-service; else exit_code=$?; echo "WARP service failed to start with exit code $exit_code at $(date)" | logger -t warp-service; exit $exit_code; fi'
+
+# ExecStop - Stop the WARP service
+ExecStop=/bin/bash -c 'set -e; echo "Stopping WARP service at $(date)" | logger -t warp-service; if /usr/local/bin/warp-down.sh 2>&1 | logger -t warp-service; then echo "WARP service stopped successfully at $(date)" | logger -t warp-service; else exit_code=$?; echo "WARP service failed to stop with exit code $exit_code at $(date)" | logger -t warp-service; exit $exit_code; fi'
+
+# ExecReload - Reload the WARP service (restart)
+ExecReload=/bin/bash -c 'echo "Reloading WARP service at $(date)" | logger -t warp-service; systemctl stop warp.service; sleep 2; systemctl start warp.service; echo "WARP service reloaded at $(date)" | logger -t warp-service'
+
+# Restart policy
+Restart=no
+RestartSec=0
+
+# Timeout settings
+TimeoutStartSec=300
+TimeoutStopSec=60
+
+# Security settings
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/docker /etc/iproute2/rt_tables /proc /sys
+
+# Capabilities needed for network operations
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW CAP_SYS_ADMIN
+
+# Standard output/error handling
+StandardOutput=journal
+StandardError=journal
+
+# Logging configuration
+LogLevelMax=debug
+
+[Install]
+WantedBy=multi-user.target 

@@ -1,6 +1,7 @@
 #!/bin/bash
 
 set -e
+set -x
 
 # Define the same variables as in warp-up.sh
 docker_network_name="warp-network"
@@ -57,8 +58,8 @@ fi
 
 # Optionally remove the Docker network (commented out by default)
 # Uncomment the following lines if you want to remove the Docker network
-echo "Removing Docker network..."
-docker network rm $docker_network_name 2>/dev/null || true
+#echo "Removing Docker network..."
+#docker network rm $docker_network_name 2>/dev/null || true
 
 echo "✅ Warp routing cleanup complete"
 echo ""

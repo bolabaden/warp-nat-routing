@@ -1,5 +1,7 @@
 #!/bin/bash
 
+set -xe
+
 # Check if running as root
 if [[ $EUID -ne 0 ]]; then
     echo "Error: This script must be run as root (use sudo)"
@@ -21,6 +23,10 @@ host_veth_ip="$DEFAULT_HOST_VETH_IP"
 cont_veth_ip="$DEFAULT_CONT_VETH_IP"
 docker_net="$DEFAULT_DOCKER_NET"
 routing_table="$DEFAULT_ROUTING_TABLE"
+
+# Track whether IPs were set by CLI arguments
+host_ip_set_by_cli=false
+cont_ip_set_by_cli=false
 
 # Function to display usage
 show_usage() {
@@ -119,8 +125,7 @@ check_ip_in_use() {
     
     # Check if IP is already assigned to any interface
     if ip addr show | grep -q "inet $ip/"; then
-        echo "Error: $name '$ip' is already assigned to an interface"
-        exit 1
+        return 1  # IP is in use
     fi
     
     # Check if IP is in the same subnet as any existing interface
@@ -129,11 +134,129 @@ check_ip_in_use() {
         if [[ "$existing_ip" != "$ip" ]]; then
             local existing_network=$(calculate_network "$existing_ip/30")
             if [[ "$ip_network" == "$existing_network" ]]; then
-                echo "Error: $name '$ip' conflicts with existing IP '$existing_ip' in the same subnet"
-                exit 1
+                return 1  # IP conflicts with existing IP in same subnet
             fi
         fi
     done
+    
+    return 0  # IP is available
+}
+
+# Function to find an available IP in the same subnet
+find_available_ip() {
+    local base_ip="$1"
+    local name="$2"
+    
+    # Extract the first three octets from the base IP
+    IFS='.' read -r -a octets <<< "$base_ip"
+    local base_prefix="${octets[0]}.${octets[1]}.${octets[2]}"
+    
+    # Try IPs in the range .1 to .254 in the same subnet
+    for i in {1..254}; do
+        local test_ip="$base_prefix.$i"
+        
+        # Skip the original IP if it's the same as base_ip
+        if [[ "$test_ip" == "$base_ip" ]]; then
+            continue
+        fi
+        
+        # Check if this IP is available
+        if check_ip_in_use "$test_ip" "$name" 2>/dev/null; then
+            echo "$test_ip"
+            return 0
+        fi
+    done
+    
+    # If no IP is available, return error
+    echo "Error: No available IP found in subnet $base_prefix.0/24" >&2
+    return 1
+}
+
+# Function to find an available IP pair in the same /30 subnet
+find_available_ip_pair() {
+    local base_host_ip="$1"
+    local base_cont_ip="$2"
+    
+    # Extract the first three octets from the base IP
+    IFS='.' read -r -a octets <<< "$base_host_ip"
+    local base_prefix="${octets[0]}.${octets[1]}.${octets[2]}"
+    
+    # Try to find a /30 subnet (4 IPs) that has at least 2 available IPs
+    for i in {0..63}; do  # 64 /30 subnets in a /24
+        local subnet_start=$((i * 4))
+        local host_ip="$base_prefix.$((subnet_start + 1))"
+        local cont_ip="$base_prefix.$((subnet_start + 2))"
+        
+        # Skip if either IP is the same as the base IPs (to avoid conflicts)
+        if [[ "$host_ip" == "$base_host_ip" || "$host_ip" == "$base_cont_ip" || 
+              "$cont_ip" == "$base_host_ip" || "$cont_ip" == "$base_cont_ip" ]]; then
+            continue
+        fi
+        
+        # Check if both IPs are available
+        if check_ip_in_use "$host_ip" "Host veth IP" 2>/dev/null && 
+           check_ip_in_use "$cont_ip" "Container veth IP" 2>/dev/null; then
+            echo "$host_ip $cont_ip"
+            return 0
+        fi
+    done
+    
+    # If no pair is available, return error
+    echo "Error: No available IP pair found in subnet $base_prefix.0/24" >&2
+    return 1
+}
+
+# Function to find an available IP that's compatible with an existing IP
+find_compatible_ip() {
+    local existing_ip="$1"
+    local name="$2"
+    
+    # Extract the first three octets from the existing IP
+    IFS='.' read -r -a octets <<< "$existing_ip"
+    local base_prefix="${octets[0]}.${octets[1]}.${octets[2]}"
+    local existing_last_octet="${octets[3]}"
+    
+    # Find which /30 subnet the existing IP belongs to
+    local subnet_start=$(( (existing_last_octet / 4) * 4 ))
+    
+    # Try to find an available IP in the same /30 subnet
+    for i in {0..3}; do
+        local test_ip="$base_prefix.$((subnet_start + i))"
+        
+        # Skip the existing IP and .0 (network address)
+        if [[ "$test_ip" == "$existing_ip" || $((subnet_start + i)) -eq 0 ]]; then
+            continue
+        fi
+        
+        # Check if this IP is available
+        if check_ip_in_use "$test_ip" "$name" 2>/dev/null; then
+            echo "$test_ip"
+            return 0
+        fi
+    done
+    
+    # If no IP in the same /30 subnet is available, try other /30 subnets
+    for i in {0..63}; do
+        local subnet_start=$((i * 4))
+        for j in {1..2}; do  # Only try .1 and .2 in each /30 subnet
+            local test_ip="$base_prefix.$((subnet_start + j))"
+            
+            # Skip if it's the same as existing IP
+            if [[ "$test_ip" == "$existing_ip" ]]; then
+                continue
+            fi
+            
+            # Check if this IP is available
+            if check_ip_in_use "$test_ip" "$name" 2>/dev/null; then
+                echo "$test_ip"
+                return 0
+            fi
+        done
+    done
+    
+    # If no IP is available, return error
+    echo "Error: No available compatible IP found in subnet $base_prefix.0/24" >&2
+    return 1
 }
 
 # Function to check if interface name is already in use
@@ -151,7 +274,7 @@ check_interface_in_use() {
 check_docker_network_exists() {
     local network="$1"
     
-    if docker network inspect "$network" &>/dev/null; then
+    if docker network inspect "$network" || true &>/dev/null; then
         echo "Error: Docker network '$network' already exists"
         exit 1
     fi
@@ -272,10 +395,12 @@ while [[ $# -gt 0 ]]; do
             ;;
         -h|--host-ip)
             host_veth_ip="$2"
+            host_ip_set_by_cli=true
             shift 2
             ;;
         -c|--container-ip)
             cont_veth_ip="$2"
+            cont_ip_set_by_cli=true
             shift 2
             ;;
         -d|--docker-net)
@@ -327,22 +452,103 @@ validate_cidr "$docker_net" "Docker network CIDR"
 # Check for conflicts
 echo "Checking for conflicts..."
 
-# Check if IPs are already in use
-check_ip_in_use "$host_veth_ip" "Host veth IP"
-check_ip_in_use "$cont_veth_ip" "Container veth IP"
+# Check if IPs are already in use and find alternatives if needed
+host_ip_conflict=false
+cont_ip_conflict=false
+
+if ! check_ip_in_use "$host_veth_ip" "Host veth IP" 2>/dev/null; then
+    if [[ "$host_ip_set_by_cli" == "false" ]]; then
+        host_ip_conflict=true
+    else
+        echo "Error: Host veth IP '$host_veth_ip' is already assigned to an interface"
+        exit 1
+    fi
+fi
+
+if ! check_ip_in_use "$cont_veth_ip" "Container veth IP" 2>/dev/null; then
+    if [[ "$cont_ip_set_by_cli" == "false" ]]; then
+        cont_ip_conflict=true
+    else
+        echo "Error: Container veth IP '$cont_veth_ip' is already assigned to an interface"
+        exit 1
+    fi
+fi
+
+# If both IPs are defaults and have conflicts, find a new pair
+if [[ "$host_ip_conflict" == "true" && "$cont_ip_conflict" == "true" && 
+      "$host_ip_set_by_cli" == "false" && "$cont_ip_set_by_cli" == "false" ]]; then
+    echo "Both default IPs are in use, finding alternative IP pair..."
+    new_ip_pair=$(find_available_ip_pair "$host_veth_ip" "$cont_veth_ip")
+    if [[ $? -eq 0 ]]; then
+        read -r new_host_ip new_cont_ip <<< "$new_ip_pair"
+        host_veth_ip="$new_host_ip"
+        cont_veth_ip="$new_cont_ip"
+        echo "Using alternative IP pair: Host=$host_veth_ip, Container=$cont_veth_ip"
+    else
+        echo "$new_ip_pair"
+        exit 1
+    fi
+# If only host IP has conflict and it's a default
+elif [[ "$host_ip_conflict" == "true" && "$host_ip_set_by_cli" == "false" ]]; then
+    echo "Host veth IP $host_veth_ip is already in use, finding compatible alternative..."
+    new_host_ip=$(find_compatible_ip "$cont_veth_ip" "Host veth IP")
+    if [[ $? -eq 0 ]]; then
+        host_veth_ip="$new_host_ip"
+        echo "Using alternative host veth IP: $host_veth_ip"
+    else
+        echo "$new_host_ip"
+        exit 1
+    fi
+# If only container IP has conflict and it's a default
+elif [[ "$cont_ip_conflict" == "true" && "$cont_ip_set_by_cli" == "false" ]]; then
+    echo "Container veth IP $cont_veth_ip is already in use, finding compatible alternative..."
+    new_cont_ip=$(find_compatible_ip "$host_veth_ip" "Container veth IP")
+    if [[ $? -eq 0 ]]; then
+        cont_veth_ip="$new_cont_ip"
+        echo "Using alternative container veth IP: $cont_veth_ip"
+    else
+        echo "$new_cont_ip"
+        exit 1
+    fi
+fi
+
+# Ensure host and container IPs are in the same subnet and don't conflict
+host_network=$(calculate_network "$host_veth_ip/30")
+cont_network=$(calculate_network "$cont_veth_ip/30")
+
+if [[ "$host_network" != "$cont_network" ]]; then
+    echo "Error: Host veth IP ($host_veth_ip) and Container veth IP ($cont_veth_ip) must be in the same /30 subnet"
+    exit 1
+fi
+
+if [[ "$host_veth_ip" == "$cont_veth_ip" ]]; then
+    echo "Error: Host veth IP and Container veth IP cannot be the same"
+    exit 1
+fi
 
 # Check if interfaces already exist
 check_interface_in_use "$veth_host" "Veth host interface"
 check_interface_in_use "${veth_host#veth-}-cont" "Veth container interface"
 
 # Check if Docker network already exists
-check_docker_network_exists "$docker_network_name"
+#check_docker_network_exists "$docker_network_name"
 
 # Check if routing table already exists
-check_routing_table_exists "$routing_table"
+#check_routing_table_exists "$routing_table"
 
 # Check for Docker network CIDR conflicts
 check_docker_network_conflict "$docker_net"
+
+if ! command -v bc &>/dev/null; then
+    echo "Error: 'bc' command is required but not found, installing now..."
+    apt-get update && apt-get install -y bc
+    if ! command -v bc &>/dev/null; then
+        echo "Error: 'bc' command installation failed"
+        exit 1
+    else
+        echo "✅ 'bc' command installed"
+    fi
+fi
 
 echo "✅ All validations passed"
 
@@ -356,7 +562,8 @@ echo "  Host veth: $veth_host"
 echo "  Container veth: $veth_container"
 
 # Run warp-down.sh first
-./warp-down.sh
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+"$SCRIPT_DIR/warp-down.sh"
 
 set -xe
 
@@ -407,7 +614,7 @@ fi
 
 # Create warp-network if missing
 if ! docker network inspect $docker_network_name >/dev/null 2>&1; then
-    docker network create --driver=bridge --subnet $docker_net --gateway 10.45.0.1 \
+    docker network create --driver=bridge --subnet $docker_net --gateway ${docker_net%.*}.1 \
         -o com.docker.network.bridge.name=$docker_bridge $docker_network_name
 fi
 
@@ -453,6 +660,13 @@ fi
 # Flush old rules
 ip rule del from $docker_net table $routing_table 2>/dev/null || true
 ip rule add from $docker_net table $routing_table
+
+# Ensure the routing table exists before trying to flush it
+if ! ip route show table $routing_table &>/dev/null; then
+    # Create the table by adding a temporary route and then removing it
+    ip route add unreachable default table $routing_table 2>/dev/null || true
+    ip route del unreachable default table $routing_table 2>/dev/null || true
+fi
 
 ip route flush table $routing_table
 ip route add $docker_net dev $docker_bridge table $routing_table

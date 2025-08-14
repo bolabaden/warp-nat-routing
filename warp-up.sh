@@ -573,7 +573,6 @@ docker container rm warp || true 2>/dev/null
 
 # Build docker run command with optional environment variables
 docker_run_cmd="docker run --detach \
-    --net publicnet \
     --name warp \
     --device-cgroup-rule 'c 10:200 rwm' \
     -e WARP_SLEEP=\"\${WARP_SLEEP:-2}\" \

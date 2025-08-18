@@ -330,3 +330,199 @@ This project is provided as-is for educational and operational purposes.
 - Cloudflare for WARP
 - Docker community for container networking
 - Systemd developers for service management
+
+---
+
+## 🔄 WARP NAT Routing Flow (warp-up-minimal.sh)
+
+### 📊 Network Architecture Diagram
+
+```mermaid
+graph TB
+    subgraph "Host System"
+        subgraph "Docker Networks"
+            BN[br_warp-network<br/>10.45.0.0/16]
+            BC[bridge<br/>Default Docker Network]
+        end
+        
+        subgraph "Veth Pair"
+            VH[veth-warp-host<br/>169.254.100.1/30]
+            VC[warp-host-cont<br/>169.254.100.2/30]
+        end
+        
+        subgraph "Routing Tables"
+            RT[Custom Routing Table<br/>'warp' #110]
+        end
+        
+        subgraph "Host Interfaces"
+            EI[enp0s6<br/>Host's External Interface]
+        end
+    end
+    
+    subgraph "WARP Container"
+        WC[WARP Container<br/>caomingjun/warp:latest]
+        WN[Container eth0<br/>10.0.0.2]
+    end
+    
+    subgraph "Test Containers"
+        TC1[ip_checker_naked<br/>Default Network]
+        TC2[ip_checker_warp<br/>WARP Network Only]
+        TC3[ip_checker_warp_multi_uses_public<br/>Bridge + WARP]
+        TC4[ip_checker_warp_multi_uses_warp<br/>WARP + Bridge]
+    end
+    
+    subgraph "Internet"
+        CF[Cloudflare WARP<br/>Tunnel Endpoint]
+        EX[External Services<br/>ifconfig.me, etc.]
+    end
+    
+    %% Docker network connections
+    BN --> VH
+    VH <--> VC
+    VC --> WC
+    WC --> WN
+    
+    %% Test container connections
+    TC1 --> BC
+    TC2 --> BN
+    TC3 --> BC
+    TC3 --> BN
+    TC4 --> BN
+    TC4 --> BC
+    
+    %% Routing paths
+    BN --> RT
+    RT --> VH
+    VH --> VC
+    VC --> WC
+    WC --> CF
+    CF --> EX
+    
+    %% Alternative paths
+    BC --> EI
+    EI --> EX
+    
+    %% Styling
+    classDef docker fill:#e1f5fe,stroke:#01579b,stroke-width:2px
+    classDef warp fill:#fff3e0,stroke:#e65100,stroke-width:2px
+    classDef veth fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
+    classDef routing fill:#e8f5e8,stroke:#1b5e20,stroke-width:2px
+    classDef test fill:#fff8e1,stroke:#f57f17,stroke-width:2px
+    classDef internet fill:#fce4ec,stroke:#880e4f,stroke-width:2px
+    
+    class BN,BC docker
+    class WC,CF warp
+    class VH,VC veth
+    class RT routing
+    class TC1,TC2,TC3,TC4 test
+    class EX,CF internet
+```
+
+### 🔍 Detailed Flow Explanation
+
+#### **1. Network Setup Phase**
+
+1. **WARP Container Launch**
+   - Starts `caomingjun/warp:latest` with network capabilities
+   - Container gets default Docker network (10.0.0.0/24)
+   - WARP client initializes and establishes tunnel to Cloudflare
+
+2. **Custom Docker Network Creation**
+   - Creates `warp-network` (10.45.0.0/16) with bridge `br_warp-network`
+   - This network will be used by containers that should route through WARP
+
+3. **Veth Pair Creation**
+   - Creates virtual ethernet pair: `veth-warp-host` ↔ `warp-host-cont`
+   - Host side: `veth-warp-host` (169.254.100.1/30)
+   - Container side: `warp-host-cont` (169.254.100.2/30)
+   - Moves container end into WARP container namespace
+
+#### **2. Routing Configuration**
+
+1. **Custom Routing Table**
+   - Creates routing table `warp` (#110)
+   - Routes traffic from `10.45.0.0/16` through this table
+   - Default route via `169.254.100.2` (container veth IP)
+
+2. **Policy Routing Rules**
+   - `ip rule add from 10.45.0.0/16 table warp`
+   - `ip rule add iif br_warp-network table warp`
+   - Forces traffic from WARP network through custom routing
+
+3. **NAT Configuration**
+   - Host: NATs traffic from `10.45.0.0/16` out external interface
+   - Container: NATs traffic from `10.45.0.0/16` through WARP tunnel
+
+#### **3. Traffic Flow Paths**
+
+##### **Path A: WARP Network Traffic**
+```
+Container (10.45.0.x) → br_warp-network → veth-warp-host → veth-warp-cont → WARP Container → Cloudflare WARP → Internet
+```
+
+##### **Path B: Default Network Traffic**
+```
+Container → bridge → enp0s6 → Internet (direct)
+```
+
+##### **Path C: Multi-Network Priority**
+- **WARP Priority**: Traffic routes through WARP network first
+- **Public Priority**: Traffic routes through default network first
+
+#### **4. IP Testing & Validation**
+
+The script runs comprehensive tests to verify routing:
+
+1. **IP Checker Naked** (`ip_checker_naked`)
+   - Uses default Docker network
+   - Should get host's public IP via `enp0s6`
+   - Establishes baseline for comparison
+
+2. **IP Checker WARP** (`ip_checker_warp`)
+   - Uses only WARP network
+   - Should get WARP tunnel's external IP
+   - Must differ from baseline public IP
+
+3. **IP Checker WARP Multi Uses Public** (`ip_checker_warp_multi_uses_public`)
+   - Connected to both bridge and WARP networks
+   - Bridge is default priority
+   - Should get baseline public IP
+
+4. **IP Checker WARP Multi Uses WARP** (`ip_checker_warp_multi_uses_warp`)
+   - Connected to both WARP and bridge networks
+   - WARP has higher priority
+   - Should get WARP external IP
+
+#### **5. Key Technical Details**
+
+##### **Veth Pair Function**
+- **Host Side**: Acts as gateway for WARP network traffic
+- **Container Side**: Receives traffic and forwards to WARP process
+- **Bridging**: Connects Docker network to WARP container
+
+##### **Routing Table Logic**
+- **Source-based routing**: Traffic from `10.45.0.0/16` uses custom table
+- **Interface-based routing**: Traffic entering `br_warp-network` uses custom table
+- **Default gateway**: Routes via veth pair to WARP container
+
+##### **NAT Chain**
+- **Host NAT**: Masquerades WARP network traffic out external interface
+- **Container NAT**: Masquerades WARP network traffic through WARP tunnel
+- **No double-NAT**: Traffic flows through one NAT point only
+
+#### **6. Network Isolation Benefits**
+
+1. **Selective Routing**: Only containers on `warp-network` use WARP
+2. **Split Tunneling**: Other containers use normal internet
+3. **Network Separation**: WARP traffic isolated from host traffic
+4. **Configurable**: Easy to add/remove containers from WARP routing
+
+#### **7. Troubleshooting Points**
+
+- **WARP Container Status**: Check `docker logs warp`
+- **Routing Table**: Verify `ip route show table warp`
+- **NAT Rules**: Check `iptables -t nat -L`
+- **Veth Status**: Verify `ip link show veth-warp-host`
+- **Container Connectivity**: Test with `docker exec container ping 8.8.8.8`
+
+This architecture provides a robust, scalable solution for routing Docker container traffic through Cloudflare WARP while maintaining network isolation and enabling split tunneling capabilities.

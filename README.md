@@ -341,39 +341,39 @@ This project is provided as-is for educational and operational purposes.
 graph TB
     subgraph "Host System"
         subgraph "Docker Networks"
-            BN[br_warp-network<br/>10.45.0.0/16]
-            BC[bridge<br/>Default Docker Network]
+            BN["br_warp-network<br/>10.45.0.0/16"]
+            BC["bridge<br/>Default Docker Network"]
         end
         
         subgraph "Veth Pair"
-            VH[veth-warp-host<br/>169.254.100.1/30]
-            VC[warp-host-cont<br/>169.254.100.2/30]
+            VH["veth-warp-host<br/>169.254.100.1/30"]
+            VC["warp-host-cont<br/>169.254.100.2/30"]
         end
         
         subgraph "Routing Tables"
-            RT[Custom Routing Table<br/>'warp' #110]
+            RT["Custom Routing Table<br/>'warp' #110"]
         end
         
         subgraph "Host Interfaces"
-            EI[enp0s6<br/>Host's External Interface]
+            EI["enp0s6<br/>Host's External Interface"]
         end
     end
     
     subgraph "WARP Container"
-        WC[WARP Container<br/>caomingjun/warp:latest]
-        WN[Container eth0<br/>10.0.0.2]
+        WC["WARP Container<br/>caomingjun/warp:latest"]
+        WN["Container eth0<br/>10.0.0.2"]
     end
     
     subgraph "Test Containers"
-        TC1[ip_checker_naked<br/>Default Network]
-        TC2[ip_checker_warp<br/>WARP Network Only]
-        TC3[ip_checker_warp_multi_uses_public<br/>Bridge + WARP]
-        TC4[ip_checker_warp_multi_uses_warp<br/>WARP + Bridge]
+        TC1["ip_checker_naked<br/>Default Network"]
+        TC2["ip_checker_warp<br/>WARP Network Only"]
+        TC3["ip_checker_warp_multi_uses_public<br/>Bridge + WARP"]
+        TC4["ip_checker_warp_multi_uses_warp<br/>WARP + Bridge"]
     end
     
     subgraph "Internet"
-        CF[Cloudflare WARP<br/>Tunnel Endpoint]
-        EX[External Services<br/>ifconfig.me, etc.]
+        CF["Cloudflare WARP<br/>Tunnel Endpoint"]
+        EX["External Services<br/>ifconfig.me, etc."]
     end
     
     %% Docker network connections

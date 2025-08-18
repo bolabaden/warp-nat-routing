@@ -4,7 +4,7 @@ A comprehensive solution for routing Docker container traffic through Cloudflare
 
 ## 🎯 Problem Solved
 
-Traditional WARP Docker setups typically use SOCKS5 proxy on port 1080, which has limitations:
+Traditional WARP setups typically use SOCKS5 proxy on port 1080, which has limitations:
 
 - **Split tunneling is nearly impossible** when WARP is installed on the host
 - **Complex routing configuration** required for selective traffic routing
@@ -20,13 +20,12 @@ This project solves these issues by:
 
 ## 🚀 Features
 
-- **NAT-based routing** instead of SOCKS5 proxy
+- **NAT-based routing** in addition to SOCKS5
+- **Docker network created** that can be assigned to your Containers
 - **Configurable network parameters** via CLI arguments
 - **Comprehensive validation** for all network configurations
 - **Systemd service integration** with proper logging
-- **Optional WARP Teams support** (works with free WARP too)
 - **Automatic startup** on system boot
-- **Production-ready** with security hardening
 
 ## 📋 Requirements
 
@@ -34,7 +33,6 @@ This project solves these issues by:
 - **Docker** daemon running
 - **Root privileges** for network operations
 - **`bc` command** for network calculations
-- **Cloudflare WARP** (free or Teams)
 
 ## 🏗️ Architecture
 
@@ -175,19 +173,9 @@ sudo journalctl -u warp -p err
 sudo journalctl -t warp-service
 ```
 
-## 🛡️ Security Features
-
-The systemd service includes several security features:
-
-- **NoNewPrivileges**: Prevents privilege escalation
-- **ProtectSystem**: Protects system directories
-- **ProtectHome**: Protects home directories
-- **ReadWritePaths**: Explicitly allows access to needed paths
-- **AmbientCapabilities**: Grants necessary network capabilities
-
 ## 🔍 Validation Features
 
-The enhanced `warp-up.sh` script includes comprehensive validation:
+The `warp-up.sh` script includes some various validations:
 
 - **IP Address Validation**: Format checking, octet validation, conflict detection
 - **CIDR Validation**: Format checking, prefix length validation, subnet overlap detection
@@ -252,35 +240,6 @@ docker run --rm --network bridge app2        # Goes through normal internet
    ls -la /path/to/warp-up.sh
    ```
 
-3. **Network Issues**
-
-   ```bash
-   docker network ls | grep warp
-   ip route show table warp
-   sudo iptables -t nat -L | grep warp
-   ```
-
-4. **WARP Container Issues**
-
-   ```bash
-   docker logs warp
-   docker exec warp warp-cli status
-   ```
-
-### Manual Testing
-
-```bash
-# Test CLI arguments
-./test-warp-up.sh
-
-# Test service functionality
-./test-service.sh
-
-# Test scripts directly
-sudo ./warp-up.sh --help
-sudo ./warp-down.sh
-```
-
 ## 📚 Documentation
 
 - **[WARP_CONFIGURATION.md](WARP_CONFIGURATION.md)** - Detailed CLI configuration guide
@@ -291,6 +250,12 @@ sudo ./warp-down.sh
 ## 🔄 Uninstallation
 
 To completely remove the service:
+
+```bash
+sudo ./uninstall_warp_service.sh
+```
+
+or manually:
 
 ```bash
 # Stop and disable service
@@ -341,39 +306,39 @@ This project is provided as-is for educational and operational purposes.
 graph TB
     subgraph "Host System"
         subgraph "Docker Networks"
-            BN[br_warp-network<br/>10.45.0.0/16]
-            BC[bridge<br/>Default Docker Network]
+            BN["br_warp-network<br/>10.45.0.0/16"]
+            BC["bridge<br/>Default Docker Network"]
         end
         
         subgraph "Veth Pair"
-            VH[veth-warp-host<br/>169.254.100.1/30]
-            VC[warp-host-cont<br/>169.254.100.2/30]
+            VH["veth-warp-host<br/>169.254.100.1/30"]
+            VC["warp-host-cont<br/>169.254.100.2/30"]
         end
         
         subgraph "Routing Tables"
-            RT[Custom Routing Table<br/>'warp' #110]
+            RT["Custom Routing Table<br/>'warp' #110"]
         end
         
         subgraph "Host Interfaces"
-            EI[enp0s6<br/>Host's External Interface]
+            EI["enp0s6<br/>Host's External Interface"]
         end
     end
     
     subgraph "WARP Container"
-        WC[WARP Container<br/>caomingjun/warp:latest]
-        WN[Container eth0<br/>10.0.0.2]
+        WC["WARP Container<br/>caomingjun/warp:latest"]
+        WN["Container eth0<br/>10.0.0.2"]
     end
     
     subgraph "Test Containers"
-        TC1[ip_checker_naked<br/>Default Network]
-        TC2[ip_checker_warp<br/>WARP Network Only]
-        TC3[ip_checker_warp_multi_uses_public<br/>Bridge + WARP]
-        TC4[ip_checker_warp_multi_uses_warp<br/>WARP + Bridge]
+        TC1["ip_checker_naked<br/>Default Network"]
+        TC2["ip_checker_warp<br/>WARP Network Only"]
+        TC3["ip_checker_warp_multi_uses_public<br/>Bridge + WARP"]
+        TC4["ip_checker_warp_multi_uses_warp<br/>WARP + Bridge"]
     end
     
     subgraph "Internet"
-        CF[Cloudflare WARP<br/>Tunnel Endpoint]
-        EX[External Services<br/>ifconfig.me, etc.]
+        CF["Cloudflare WARP<br/>Tunnel Endpoint"]
+        EX["External Services<br/>ifconfig.me, etc."]
     end
     
     %% Docker network connections

@@ -198,7 +198,7 @@ fi
 echo "Starting WARP service..."
 systemctl restart warp || true
 systemctl enable warp || true
-systemctl status warp || true
+systemctl status warp --no-pager -o cat || true
 
 print_success "WARP service setup complete!"
 echo ""

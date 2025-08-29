@@ -16,22 +16,22 @@ This project solves these issues by:
 - **Using NAT instead of SOCKS5** for seamless traffic routing
 - **Proper Docker network integration** with custom routing tables
 - **Split tunneling support** through selective network routing
-- **Systemd service integration** for production deployment
+- **Docker Compose integration** for easy deployment and management
 
 ## 🚀 Features
 
 - **NAT-based routing** in addition to SOCKS5
-- **Docker network created** that can be assigned to your Containers
-- **Configurable network parameters** via CLI arguments
+- **Docker network created** that can be assigned to your containers
+- **Configurable network parameters** via environment variables
 - **Comprehensive validation** for all network configurations
-- **Systemd service integration** with proper logging
-- **Automatic startup** on system boot
+- **Docker Compose deployment** with health checks and monitoring
+- **Automatic network setup** via init container
 
 ## 📋 Requirements
 
-- **Linux** with systemd
-- **Docker** daemon running
-- **Root privileges** for network operations
+- **Linux** with Docker and Docker Compose
+- **Docker daemon** running
+- **Root privileges** for network operations (when running setup scripts)
 - **`bc` command** for network calculations
 
 ## 🏗️ Architecture
@@ -40,7 +40,7 @@ This project solves these issues by:
 ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
 │   Docker        │    │   WARP          │    │   Internet      │
 │   Container     │───▶│   Container     │───▶│   (via WARP)    │
-│   (10.45.0.0/16)│    │   (NAT Gateway) │    │                 │
+│   (warp-nat-net)│    │   (NAT Gateway) │    │                 │
 └─────────────────┘    └─────────────────┘    └─────────────────┘
          │                       │
          │              ┌─────────────────┐
@@ -52,228 +52,287 @@ This project solves these issues by:
 
 ## 🚀 Quick Start
 
-### 1. Install the Service
+### 1. Clone and Navigate
 
 ```bash
-cd warp-docker-nat
-sudo ./setup-warp-service.sh
+git clone <repository-url>
+cd warp-nat-routing
 ```
 
-### 2. Start the Service
+**Available Environment Variables:**
+
+| Variable | Description | Default | Required |
+|----------|-------------|---------|----------|
+| `WARP_LICENSE_KEY` | WARP Teams license key | (unset) | No |
+| `WARP_TUNNEL_TOKEN` | WARP Teams tunnel token | (unset) | No |
+| `GOST_SOCKS5_PORT` | SOCKS5 proxy port | `1080` | No |
+| `GOST_ARGS` | Additional GOST arguments | `-L :1080` | No |
+
+**Note:** All environment variables are optional. WARP will run in free mode by default.
+
+### 2. Start the Stack
 
 ```bash
-sudo systemctl start warp
-sudo systemctl enable warp  # Enable on boot
+# Start all services
+docker-compose up -d
+
+# View logs
+docker-compose logs -f
 ```
 
 ### 3. Check Status
 
 ```bash
-sudo systemctl status warp
-sudo journalctl -u warp -f  # View real-time logs
+# Check service status
+docker-compose ps
+
+# Check WARP container health
+docker-compose logs warp-nat-gateway
+
+# Check routing setup
+docker-compose logs warp_router
 ```
 
 ### 4. Test with a Container
 
 ```bash
 # Run a container on the WARP network
-docker run --rm --network warp-network alpine:latest sh -c "curl -s ifconfig.me"
+docker run --rm --network warp-nat-net alpine:latest sh -c "curl -s ifconfig.me"
 ```
 
 ## 📁 Project Structure
 
 ```
-warp-docker-nat/
+warp-nat-routing/
 ├── README.md                    # This file
-├── warp-up.sh                   # Main setup script with CLI arguments
-├── warp-down.sh                 # Cleanup script
-├── warp.service                 # Systemd service file
-├── warp.env.template            # Environment variables template
-├── setup-warp-service.sh        # Complete setup script
-├── install-warp-service.sh      # Service installation script
-├── test-warp-up.sh             # CLI argument testing
-├── test-service.sh             # Service functionality testing
-├── WARP_CONFIGURATION.md       # CLI configuration documentation
-└── SYSTEMD_SERVICE.md          # Systemd service documentation
+├── docker-compose.yml           # Main Docker Compose configuration
+├── warp-nat-setup.sh           # Network setup script (embedded in compose)
+├── WARP_CONFIGURATION.md       # Configuration documentation
+├── recreate_warp_docker_network.sh # Network recreation script
+└── tests/                      # Test scripts
+    ├── test-project.sh         # Project validation tests
+    ├── test-warp-up.sh         # Configuration testing guide
+    └── test-interface-names.sh # Interface naming tests
 ```
 
 ## ⚙️ Configuration
 
-### CLI Arguments (warp-up.sh)
+### Docker Compose Services
 
-The script supports comprehensive CLI arguments for customization:
+The stack consists of several services:
 
-```bash
-# Basic usage with defaults
-sudo ./warp-up.sh
+1. **`warp-nat-gateway`** - Main WARP container with NAT enabled
+2. **`warp_router`** - Init container that sets up network routing
+3. **`ip-checker-*`** - Test containers for validating routing
 
-# Custom network configuration
-sudo ./warp-up.sh --network-name my-warp --docker-net 192.168.100.0/24
+### Network Configuration
 
-# Custom IP addresses
-sudo ./warp-up.sh --host-ip 169.254.200.1 --container-ip 169.254.200.2
+The `warp-nat-setup.sh` script (embedded in the compose file) handles:
 
-# Multiple custom values
-sudo ./warp-up.sh -n my-warp -d 192.168.100.0/24 -r mytable -h 169.254.200.1 -c 169.254.200.2
-```
+- **Docker Network Creation**: Creates `warp-nat-net` with custom bridge settings
+- **Veth Pair Setup**: Establishes virtual ethernet connection between host and WARP container
+- **Routing Table Configuration**: Sets up custom routing table for WARP traffic
+- **NAT Rules**: Configures iptables rules for proper traffic flow
 
-**Available Options:**
-
-- `-n, --network-name` - Docker network name
-- `-v, --veth-host` - Host veth interface name
-- `-h, --host-ip` - Host veth IP address
-- `-c, --container-ip` - Container veth IP address
-- `-d, --docker-net` - Docker network CIDR
-- `-r, --routing-table` - Routing table name
-
-### Environment Variables (Optional)
+### Environment Variables
 
 | Variable | Description | Default | Required |
 |----------|-------------|---------|----------|
 | `WARP_LICENSE_KEY` | WARP Teams license key | (unset) | No |
 | `WARP_TUNNEL_TOKEN` | WARP Teams tunnel token | (unset) | No |
-| `WARP_SLEEP` | Sleep time for WARP container | `2` | No |
-| `WARP_DISABLE_IPV6` | Disable IPv6 in WARP container | `1` | No |
-
-**Note:** All environment variables are optional. WARP will run in free mode by default.
+| `GOST_SOCKS5_PORT` | SOCKS5 proxy port | `1080` | No |
+| `GOST_ARGS` | Additional GOST arguments | `-L :1080` | No |
+| `BETA_FIX_HOST_CONNECTIVITY` | Auto-fix host connectivity | `false` | No |
 
 ## 🔧 Service Management
 
 ### Basic Commands
 
 ```bash
-# Start/Stop/Restart
-sudo systemctl start warp
-sudo systemctl stop warp
-sudo systemctl restart warp
+# Start all services
+docker-compose up -d
 
-# Status and Logs
-sudo systemctl status warp
-sudo journalctl -u warp -f
-sudo journalctl -u warp --since '1 hour ago'
+# Stop all services
+docker-compose down
 
-# Enable/Disable on Boot
-sudo systemctl enable warp
-sudo systemctl disable warp
+# Restart specific service
+docker-compose restart warp-nat-gateway
+
+# View logs
+docker-compose logs -f
+docker-compose logs warp-nat-gateway
+docker-compose logs warp_router
+
+# Check status
+docker-compose ps
 ```
 
-### Logging
+### Network Management
 
 ```bash
-# Real-time logs
-sudo journalctl -u warp -f
+# Recreate the WARP network (if needed)
+sudo ./recreate_warp_docker_network.sh
 
-# Recent logs with timestamps
-sudo journalctl -u warp -o short-iso --since '1 hour ago'
+# Check network status
+docker network ls | grep warp
+docker network inspect warp-nat-net
 
-# Error logs only
-sudo journalctl -u warp -p err
-
-# Service-specific logs
-sudo journalctl -t warp-service
+# Check routing tables
+ip route show table warp-nat-routing
 ```
 
 ## 🔍 Validation Features
 
-The `warp-up.sh` script includes some various validations:
+The stack includes comprehensive testing:
 
-- **IP Address Validation**: Format checking, octet validation, conflict detection
-- **CIDR Validation**: Format checking, prefix length validation, subnet overlap detection
-- **Interface Name Validation**: Character restrictions, length limits, conflict checking
-- **Docker Network Validation**: Uniqueness checking, conflict detection
-- **Routing Table Validation**: Uniqueness checking, table number availability
+- **IP Checker Naked**: Uses default Docker network (baseline)
+- **IP Checker WARP**: Uses only WARP network (should get WARP IP)
+- **IP Checker Multi**: Connected to both networks for testing priority
+
+### Testing Commands
+
+```bash
+# Check all test containers
+docker-compose ps ip-checker-*
+
+# View test results
+docker-compose logs ip-checker-naked
+docker-compose logs ip-checker-warp
+docker-compose logs ip-checker-warp-multi-uses-warp
+
+# Manual test
+docker run --rm --network warp-nat-net alpine:latest sh -c "curl -s ifconfig.me"
+```
 
 ## 📖 Usage Examples
 
 ### Basic Setup (Free WARP)
 
 ```bash
-# Install and start with default settings
-sudo ./setup-warp-service.sh
-sudo systemctl start warp
+# Start with default settings
+docker-compose up -d
 
-# Test with a container
-docker run --rm --network warp-network alpine:latest sh -c "curl -s ifconfig.me"
-```
-
-### Custom Network Configuration
-
-```bash
-# Use custom network settings
-sudo ./warp-up.sh --network-name my-warp --docker-net 192.168.100.0/24
-
-# Run containers on custom network
-docker run --rm --network my-warp alpine:latest sh -c "curl -s ifconfig.me"
+# Test routing
+docker run --rm --network warp-nat-net alpine:latest sh -c "curl -s ifconfig.me"
 ```
 
 ### WARP Teams Setup
 
 ```bash
-# Install with Teams credentials
-WARP_LICENSE_KEY=your_key WARP_TUNNEL_TOKEN=your_token sudo ./setup-warp-service.sh
-sudo systemctl start warp
+# Create .env file with credentials
+cat > .env << EOF
+WARP_LICENSE_KEY=your_key_here
+WARP_TUNNEL_TOKEN=your_token_here
+EOF
+
+# Start services
+docker-compose up -d
 ```
 
 ### Split Tunneling
 
 ```bash
 # Route only specific containers through WARP
-docker run --rm --network warp-network app1  # Goes through WARP
+docker run --rm --network warp-nat-net app1  # Goes through WARP
 docker run --rm --network bridge app2        # Goes through normal internet
+
+# Multi-network container (WARP priority)
+docker run --rm \
+  --network warp-nat-net \
+  --network public \
+  alpine:latest sh -c "curl -s ifconfig.me"
 ```
 
 ## 🐛 Troubleshooting
 
 ### Common Issues
 
-1. **Service Fails to Start**
+1. **Network Setup Fails**
 
    ```bash
-   sudo systemctl status warp
-   sudo journalctl -u warp --since '5 minutes ago'
+   # Check router logs
+   docker-compose logs warp_router
+   
+   # Check WARP container status
+   docker-compose logs warp-nat-gateway
+   
+   # Verify network exists
+   docker network ls | grep warp
    ```
 
 2. **Permission Denied**
 
    ```bash
-   sudo systemctl show warp | grep User
-   ls -la /path/to/warp-up.sh
+   # Ensure running with proper privileges
+   sudo docker-compose up -d
+   
+   # Check container capabilities
+   docker inspect warp_router | grep -A 10 "CapAdd"
    ```
+
+3. **Routing Issues**
+
+   ```bash
+   # Check routing table
+   ip route show table warp-nat-routing
+   
+   # Check iptables rules
+   sudo iptables -t nat -L | grep warp
+   
+   # Verify veth interfaces
+   ip link show | grep veth
+   ```
+
+### Debug Mode
+
+```bash
+# View detailed logs
+docker-compose logs -f warp_router
+docker-compose logs -f warp-nat-gateway
+
+# Check container network configuration
+docker exec warp-nat-gateway ip route
+docker exec warp-nat-gateway iptables -t nat -L
+
+# Test connectivity
+docker exec warp-nat-gateway ping -c 3 8.8.8.8
+```
+
+## 🔄 Network Recreation
+
+If you need to recreate the WARP network:
+
+```bash
+# Use the provided script
+sudo ./recreate_warp_docker_network.sh
+
+# Or manually
+docker-compose down
+docker network rm warp-nat-net
+docker-compose up -d
+```
 
 ## 📚 Documentation
 
-- **[WARP_CONFIGURATION.md](WARP_CONFIGURATION.md)** - Detailed CLI configuration guide
-- **[SYSTEMD_SERVICE.md](SYSTEMD_SERVICE.md)** - Comprehensive systemd service documentation
-
-**Note:** After installation, documentation is available at `/usr/local/share/warp-docker-nat/`
+- **[WARP_CONFIGURATION.md](WARP_CONFIGURATION.md)** - Detailed configuration guide
+- **Docker Compose documentation** - [Official docs](https://docs.docker.com/compose/)
 
 ## 🔄 Uninstallation
 
-To completely remove the service:
+To completely remove the stack:
 
 ```bash
-sudo ./uninstall_warp_service.sh
-```
+# Stop and remove all services
+docker-compose down
 
-or manually:
+# Remove networks
+docker network rm warp-nat-net 2>/dev/null || true
 
-```bash
-# Stop and disable service
-sudo systemctl stop warp
-sudo systemctl disable warp
+# Remove volumes
+docker volume rm warp-nat-routing_warp-config-data 2>/dev/null || true
 
-# Remove service files
-sudo rm /etc/systemd/system/warp.service
-sudo rm -rf /etc/systemd/system/warp.service.d
-
-# Remove installed scripts and files
-sudo rm -f /usr/local/bin/warp-up.sh
-sudo rm -f /usr/local/bin/warp-down.sh
-sudo rm -rf /usr/local/share/warp-docker-nat
-
-# Reload systemd
-sudo systemctl daemon-reload
-sudo systemctl reset-failed
+# Clean up any remaining containers
+docker container prune -f
 ```
 
 ## 🤝 Contributing
@@ -294,11 +353,11 @@ This project is provided as-is for educational and operational purposes.
 
 - Cloudflare for WARP
 - Docker community for container networking
-- Systemd developers for service management
+- The `caomingjun/warp` Docker image maintainers
 
 ---
 
-## 🔄 WARP NAT Routing Flow (warp-up-minimal.sh)
+## 🔄 WARP NAT Routing Flow
 
 ### 📊 Network Architecture Diagram
 
@@ -306,34 +365,33 @@ This project is provided as-is for educational and operational purposes.
 graph TB
     subgraph "Host System"
         subgraph "Docker Networks"
-            BN["br_warp-network<br/>10.45.0.0/16"]
+            BN["br_warp-nat-net<br/>Custom WARP Network"]
             BC["bridge<br/>Default Docker Network"]
         end
         
         subgraph "Veth Pair"
-            VH["veth-warp-host<br/>169.254.100.1/30"]
-            VC["warp-host-cont<br/>169.254.100.2/30"]
+            VH["veth-warp-nat-host<br/>169.254.100.1/30"]
+            VC["warp-nat-host-nat-cont<br/>169.254.100.2/30"]
         end
         
         subgraph "Routing Tables"
-            RT["Custom Routing Table<br/>'warp' #110"]
+            RT["Custom Routing Table<br/>'warp-nat-routing'"]
         end
         
         subgraph "Host Interfaces"
-            EI["enp0s6<br/>Host's External Interface"]
+            EI["Host's External Interface"]
         end
     end
     
     subgraph "WARP Container"
         WC["WARP Container<br/>caomingjun/warp:latest"]
-        WN["Container eth0<br/>10.0.0.2"]
+        WN["Container eth0<br/>Default Docker Network"]
     end
     
     subgraph "Test Containers"
-        TC1["ip_checker_naked<br/>Default Network"]
-        TC2["ip_checker_warp<br/>WARP Network Only"]
-        TC3["ip_checker_warp_multi_uses_public<br/>Bridge + WARP"]
-        TC4["ip_checker_warp_multi_uses_warp<br/>WARP + Bridge"]
+        TC1["ip-checker-naked<br/>Default Network"]
+        TC2["ip-checker-warp<br/>WARP Network Only"]
+        TC3["ip-checker-warp-multi<br/>Both Networks"]
     end
     
     subgraph "Internet"
@@ -350,10 +408,8 @@ graph TB
     %% Test container connections
     TC1 --> BC
     TC2 --> BN
-    TC3 --> BC
     TC3 --> BN
-    TC4 --> BN
-    TC4 --> BC
+    TC3 --> BC
     
     %% Routing paths
     BN --> RT
@@ -379,7 +435,7 @@ graph TB
     class WC,CF warp
     class VH,VC veth
     class RT routing
-    class TC1,TC2,TC3,TC4 test
+    class TC1,TC2,TC3 test
     class EX,CF internet
 ```
 
@@ -388,46 +444,45 @@ graph TB
 #### **1. Network Setup Phase**
 
 1. **WARP Container Launch**
-   - Starts `caomingjun/warp:latest` with network capabilities
-   - Container gets default Docker network (10.0.0.0/24)
+   - Starts `caomingjun/warp:latest` with NAT enabled
+   - Container gets default Docker network
    - WARP client initializes and establishes tunnel to Cloudflare
 
 2. **Custom Docker Network Creation**
-   - Creates `warp-network` (10.45.0.0/16) with bridge `br_warp-network`
+   - Creates `warp-nat-net` with bridge `br_warp-nat-net`
    - This network will be used by containers that should route through WARP
 
 3. **Veth Pair Creation**
-   - Creates virtual ethernet pair: `veth-warp-host` ↔ `warp-host-cont`
-   - Host side: `veth-warp-host` (169.254.100.1/30)
-   - Container side: `warp-host-cont` (169.254.100.2/30)
+   - Creates virtual ethernet pair: `veth-warp-nat-host` ↔ `warp-nat-host-nat-cont`
+   - Host side: `veth-warp-nat-host` (169.254.100.1/30)
+   - Container side: `warp-nat-host-nat-cont` (169.254.100.2/30)
    - Moves container end into WARP container namespace
 
 #### **2. Routing Configuration**
 
 1. **Custom Routing Table**
-   - Creates routing table `warp` (#110)
-   - Routes traffic from `10.45.0.0/16` through this table
+   - Creates routing table `warp-nat-routing`
+   - Routes traffic from WARP network through this table
    - Default route via `169.254.100.2` (container veth IP)
 
 2. **Policy Routing Rules**
-   - `ip rule add from 10.45.0.0/16 table warp`
-   - `ip rule add iif br_warp-network table warp`
    - Forces traffic from WARP network through custom routing
+   - Ensures proper traffic flow to WARP container
 
 3. **NAT Configuration**
-   - Host: NATs traffic from `10.45.0.0/16` out external interface
-   - Container: NATs traffic from `10.45.0.0/16` through WARP tunnel
+   - Host: NATs traffic from WARP network out external interface
+   - Container: NATs traffic from WARP network through WARP tunnel
 
 #### **3. Traffic Flow Paths**
 
 ##### **Path A: WARP Network Traffic**
 ```
-Container (10.45.0.x) → br_warp-network → veth-warp-host → veth-warp-cont → WARP Container → Cloudflare WARP → Internet
+Container (warp-nat-net) → br_warp-nat-net → veth-warp-nat-host → veth-warp-nat-host-nat-cont → WARP Container → Cloudflare WARP → Internet
 ```
 
 ##### **Path B: Default Network Traffic**
 ```
-Container → bridge → enp0s6 → Internet (direct)
+Container → bridge → Host External Interface → Internet (direct)
 ```
 
 ##### **Path C: Multi-Network Priority**
@@ -436,24 +491,19 @@ Container → bridge → enp0s6 → Internet (direct)
 
 #### **4. IP Testing & Validation**
 
-The script runs comprehensive tests to verify routing:
+The stack runs comprehensive tests to verify routing:
 
-1. **IP Checker Naked** (`ip_checker_naked`)
+1. **IP Checker Naked** (`ip-checker-naked`)
    - Uses default Docker network
-   - Should get host's public IP via `enp0s6`
+   - Should get host's public IP
    - Establishes baseline for comparison
 
-2. **IP Checker WARP** (`ip_checker_warp`)
+2. **IP Checker WARP** (`ip-checker-warp`)
    - Uses only WARP network
    - Should get WARP tunnel's external IP
    - Must differ from baseline public IP
 
-3. **IP Checker WARP Multi Uses Public** (`ip_checker_warp_multi_uses_public`)
-   - Connected to both bridge and WARP networks
-   - Bridge is default priority
-   - Should get baseline public IP
-
-4. **IP Checker WARP Multi Uses WARP** (`ip_checker_warp_multi_uses_warp`)
+3. **IP Checker WARP Multi** (`ip-checker-warp-multi-uses-warp`)
    - Connected to both WARP and bridge networks
    - WARP has higher priority
    - Should get WARP external IP
@@ -466,8 +516,8 @@ The script runs comprehensive tests to verify routing:
 - **Bridging**: Connects Docker network to WARP container
 
 ##### **Routing Table Logic**
-- **Source-based routing**: Traffic from `10.45.0.0/16` uses custom table
-- **Interface-based routing**: Traffic entering `br_warp-network` uses custom table
+- **Source-based routing**: Traffic from WARP network uses custom table
+- **Interface-based routing**: Traffic entering WARP network uses custom table
 - **Default gateway**: Routes via veth pair to WARP container
 
 ##### **NAT Chain**
@@ -477,17 +527,17 @@ The script runs comprehensive tests to verify routing:
 
 #### **6. Network Isolation Benefits**
 
-1. **Selective Routing**: Only containers on `warp-network` use WARP
+1. **Selective Routing**: Only containers on `warp-nat-net` use WARP
 2. **Split Tunneling**: Other containers use normal internet
 3. **Network Separation**: WARP traffic isolated from host traffic
 4. **Configurable**: Easy to add/remove containers from WARP routing
 
 #### **7. Troubleshooting Points**
 
-- **WARP Container Status**: Check `docker logs warp`
-- **Routing Table**: Verify `ip route show table warp`
+- **WARP Container Status**: Check `docker-compose logs warp-nat-gateway`
+- **Routing Table**: Verify `ip route show table warp-nat-routing`
 - **NAT Rules**: Check `iptables -t nat -L`
-- **Veth Status**: Verify `ip link show veth-warp-host`
+- **Veth Status**: Verify `ip link show veth-warp-nat-host`
 - **Container Connectivity**: Test with `docker exec container ping 8.8.8.8`
 
 This architecture provides a robust, scalable solution for routing Docker container traffic through Cloudflare WARP while maintaining network isolation and enabling split tunneling capabilities.

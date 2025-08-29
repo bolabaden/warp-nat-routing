@@ -6,6 +6,12 @@ volumes:
 
 
 networks:
+  warp-nat-net:
+    external: true  # docker network create --attachable -o com.docker.network.bridge.name=br_warp-nat-net -o com.docker.network.bridge.enable_ip_masquerade=false warp-nat-net
+    attachable: true
+    driver_opts:
+      com.docker.network.bridge.name: br_warp-nat-net
+      com.docker.network.bridge.enable_ip_masquerade: "false"  # required for custom NAT control
   public:
     driver: bridge
 
@@ -14,22 +20,22 @@ configs:
   warp-nat-setup.sh:
     content: |
       #!/bin/bash
-      set -xe
+      set -e
 
       # curl is already present; install jq manually if not present
       if ! command -v jq >/dev/null 2>&1; then
-        echo \"jq not found, installing...\"
-        ARCH=$$(uname -m)
-        case \"$$ARCH\" in
-          x86_64) JQ_ARCH=\"amd64\" ;;
-          aarch64|arm64) JQ_ARCH=\"aarch64\" ;;
-          *) echo \"Unsupported architecture: $$ARCH\"; exit 1 ;;
-        esac
-        # Get the latest release tag from GitHub API
-        LATEST_TAG=$$(curl -s https://api.github.com/repos/jqlang/jq/releases/latest | grep '\"tag_name\":' | sed -E 's/.*\"([^\"]+)\".*/\1/')
-        JQ_URL=\"https://github.com/jqlang/jq/releases/download/$$LATEST_TAG/jq-linux-$$JQ_ARCH\"
-        JQ_BIN=\"/usr/local/bin/jq\"
-        curl -L -o \"$${JQ_BIN}\" \"$${JQ_URL}\" && chmod +x \"$${JQ_BIN}\"
+          echo \"jq not found, installing...\"
+          ARCH=$$(uname -m)
+          case \"$$ARCH\" in
+              x86_64) JQ_ARCH=\"amd64\" ;;
+              aarch64|arm64) JQ_ARCH=\"aarch64\" ;;
+              *) echo \"Unsupported architecture: $$ARCH\"; exit 1 ;;
+          esac
+          # Get the latest release tag from GitHub API
+          LATEST_TAG=$$(curl -s https://api.github.com/repos/jqlang/jq/releases/latest | grep '\"tag_name\":' | sed -E 's/.*\"([^\"]+)\".*/\1/')
+          JQ_URL=\"https://github.com/jqlang/jq/releases/download/$$LATEST_TAG/jq-linux-$$JQ_ARCH\"
+          JQ_BIN=\"/usr/local/bin/jq\"
+          curl -L -o \"$${JQ_BIN}\" \"$${JQ_URL}\" && chmod +x \"$${JQ_BIN}\"
       fi
 
       DOCKER="docker -H $${DOCKER_HOST:-unix:///var/run/docker.sock}"
@@ -39,13 +45,13 @@ configs:
       # Track if variables were provided before setting defaults
       ROUTER_CONTAINER_NAME_PROVIDED=false
       if [[ -n "$${ROUTER_CONTAINER_NAME+x}" ]]; then
-        ROUTER_CONTAINER_NAME_PROVIDED=true
+          ROUTER_CONTAINER_NAME_PROVIDED=true
       fi
       ROUTER_CONTAINER_NAME="$${ROUTER_CONTAINER_NAME:-warp_router}"
 
       DOCKER_NETWORK_NAME_PROVIDED=false
       if [[ -n "$${DOCKER_NETWORK_NAME+x}" ]]; then
-        DOCKER_NETWORK_NAME_PROVIDED=true
+          DOCKER_NETWORK_NAME_PROVIDED=true
       fi
       DOCKER_NETWORK_NAME="$${DOCKER_NETWORK_NAME:-}"
 
@@ -57,25 +63,25 @@ configs:
 
       HOST_VETH_IP_PROVIDED=false
       if [[ -n "$${HOST_VETH_IP+x}" ]]; then
-        HOST_VETH_IP_PROVIDED=true
+          HOST_VETH_IP_PROVIDED=true
       fi
       HOST_VETH_IP="$${HOST_VETH_IP:-169.254.100.1}"
 
       CONT_VETH_IP_PROVIDED=false
       if [[ -n "$${CONT_VETH_IP+x}" ]]; then
-        CONT_VETH_IP_PROVIDED=true
+          CONT_VETH_IP_PROVIDED=true
       fi
       CONT_VETH_IP="$${CONT_VETH_IP:-169.254.100.2}"
 
       ROUTING_TABLE_PROVIDED=false
       if [[ -n "$${ROUTING_TABLE+x}" ]]; then
-        ROUTING_TABLE_PROVIDED=true
+          ROUTING_TABLE_PROVIDED=true
       fi
       ROUTING_TABLE="$${ROUTING_TABLE:-warp-nat-routing}"
 
       VETH_HOST_PROVIDED=false
       if [[ -n "$${VETH_HOST+x}" ]]; then
-        VETH_HOST_PROVIDED=true
+          VETH_HOST_PROVIDED=true
       fi
       VETH_HOST="$${VETH_HOST:-veth-warp-nat-host}" 
 
@@ -84,11 +90,11 @@ configs:
 
       # Pick a free routing table id dynamically (start at 110)
       pick_table_id() {
-      local id=110
-      while grep -q "^$$id " /etc/iproute2/rt_tables 2>/dev/null; do
-          id=$$((id+1))
-      done
-      echo $$id
+          local id=110
+          while grep -q "^$$id " /etc/iproute2/rt_tables 2>/dev/null; do
+              id=$$((id+1))
+          done
+          echo $$id
       }
 
       # Get existing routing table ID if name exists, else pick new and add
@@ -151,7 +157,7 @@ configs:
 
       # Dynamically get DOCKER_NET from network
       DOCKER_NET="$$($$DOCKER network inspect -f '{{(index .IPAM.Config 0).Subnet}}' $$STACK_NETWORK_NAME 2>/dev/null || \
-             $$DOCKER network inspect -f '{{(index .IPAM.Config 0).Subnet}}' $$BASE_NETWORK_NAME 2>/dev/null | tr -d '[:space:]')"
+              $$DOCKER network inspect -f '{{(index .IPAM.Config 0).Subnet}}' $$BASE_NETWORK_NAME 2>/dev/null | tr -d '[:space:]')"
       echo "DOCKER_NET: \"$$DOCKER_NET\""
       if [[ -z "$$DOCKER_NET" ]]; then
           echo "Error: DOCKER_NET not found"
@@ -178,7 +184,7 @@ configs:
               continue
           fi
           dev=$$(echo "$$route_line" | awk '{print $$3}')
-          state=$$(ip link show "$$dev" 2>/dev/null | grep -oP 'state \K\w+' || echo "DOWN")
+          state=$$(ip link show "$$dev" 2>/dev/null | grep -E -o 'state \K\w+' || echo "DOWN")
           if [[ "$$state" != "UP" ]]; then
               echo "Removing orphan rule for down interface $$dev: $$from_cidr"
               ip rule del from "$$from_cidr" table "$$ROUTING_TABLE" 2>/dev/null || true
@@ -199,7 +205,7 @@ configs:
               continue
           fi
           dev=$$(echo "$$route_line" | awk '{print $$3}')
-          state=$$(ip link show "$$dev" 2>/dev/null | grep -oP 'state \K\w+' || echo "DOWN")
+          state=$$(ip link show "$$dev" 2>/dev/null | grep -E -o 'state \K\w+' || echo "DOWN")
           if [[ "$$state" != "UP" ]]; then
               echo "Removing orphan NAT rule for down interface $$dev: $$s_net"
               del_rule=$$(echo "$$rule" | sed 's/^-A/-D/')
@@ -220,7 +226,7 @@ configs:
               continue
           fi
           dev=$$(echo "$$route_line" | awk '{print $$3}')
-          state=$$(ip link show "$$dev" 2>/dev/null | grep -oP 'state \K\w+' || echo "DOWN")
+          state=$$(ip link show "$$dev" 2>/dev/null | grep -E -o 'state \K\w+' || echo "DOWN")
           if [[ "$$state" != "UP" ]]; then
               echo "Removing orphan NAT rule inside warp for down interface $$dev: $$s_net"
               del_rule=$$(echo "$$rule" | sed 's/^-A/-D/')
@@ -364,10 +370,8 @@ services:
     hostname: warp-nat-gateway
     extra_hosts:
       - host.docker.internal:host-gateway
-    ports:
-      - 1080:${GOST_SOCKS5_PORT:-1080}  # SOCKS5 proxy port
-    networks:
-      - public
+    expose:
+      - ${GOST_SOCKS5_PORT:-1080}  # SOCKS5 proxy port
     # add removed rule back (https://github.com/opencontainers/runc/pull/3468)
     device_cgroup_rules:
       - 'c 10:200 rwm'
@@ -419,6 +423,7 @@ services:
       retries: 3
       start_period: 10s
     restart: always
+
   ip-checker-naked:
     # 🔹🔹 IP Checker Naked 🔹🔹
     # This is a service that checks the IP address of the container.
@@ -439,7 +444,10 @@ services:
       - warp-nat-net
     command: "/bin/sh -c 'while true; do echo \"$$(date): $$(curl -s ifconfig.me)\"; sleep 60; done'"
     healthcheck:
-      test: ["CMD-SHELL", "sh -c \"if curl -s https://cloudflare.com/cdn-cgi/trace | grep -qE '^warp=on|warp=plus$'; then echo \\\"Cloudflare WARP is active.\\\" && exit 0; else echo \\\"Cloudflare WARP is not active.\\\" && exit 1; fi\""]
+      test: [
+        "CMD-SHELL",
+        "sh -c \"if curl -s https://cloudflare.com/cdn-cgi/trace | grep -qE '^warp=on|warp=plus$'; then echo \\\"Cloudflare WARP is active.\\\" && exit 0; else echo \\\"Cloudflare WARP is not active.\\\" && exit 1; fi\""
+      ]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -453,7 +461,7 @@ services:
     # - In Docker Compose, setting gw_priority to a high number, like 100, makes a network the default gateway.
     # - Default gateway depends on the order networks are connected, with the last one often becoming default.
     build: *ip-checker-dockerfile
-    container_name: ip-checker-warp-multi-uses-public
+    container_name: ip-checker-warp-multi-uses-ambiguous
     networks:
       - warp-nat-net  # list order doesn't matter
       - public
@@ -464,7 +472,7 @@ services:
     # This is a service that checks the IP address of the container.
     # `warp_network` gateway priority 1, higher than public, so warp will be used by default.
     build: *ip-checker-dockerfile
-    container_name: ip_checker_warp_multi_uses_warp
+    container_name: ip-checker-warp-multi-uses-warp
     networks:
       warp-nat-net:
         # Default gateway is set by the last connected network or by gw_priority (e.g., 100), with Docker using the last network by default unless gw_priority is specified.

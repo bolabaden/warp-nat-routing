@@ -30,11 +30,11 @@ services:
     privileged: true
     network_mode: host
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:rw
+      - /var/run/docker.sock:${DOCKER_HOST:-/var/run/docker.sock}:rw
       - /etc/iproute2/rt_tables:/etc/iproute2/rt_tables:rw
       - /proc:/proc:rw
     environment:
-      DOCKER_HOST: unix:///var/run/docker.sock
+      DOCKER_HOST: unix://${DOCKER_HOST:-/var/run/docker.sock}
       DOCKER_NETWORK_NAME: warp-nat-net
       WARP_CONTAINER_NAME: warp-nat-gateway
       HOST_VETH_IP: 169.254.100.1

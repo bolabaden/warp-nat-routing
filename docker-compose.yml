@@ -62,7 +62,7 @@ services:
       # If set, will work as warp mode and turn NAT on.
       # You can route L3 traffic through warp-docker to Warp.
       # See https://github.com/cmj2002/warp-docker/blob/main/docs/nat-gateway.md for more information.
-      WARP_ENABLE_NAT: true
+      WARP_ENABLE_NAT: false
       # The license key of the WARP client, which is optional.
       # If you have subscribed to WARP+ service, you can fill in the key in this environment variable.
       # If you have not subscribed to WARP+ service, you can ignore this environment variable.

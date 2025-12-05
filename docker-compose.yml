@@ -66,7 +66,7 @@ services:
       # The license key of the WARP client, which is optional.
       # If you have subscribed to WARP+ service, you can fill in the key in this environment variable.
       # If you have not subscribed to WARP+ service, you can ignore this environment variable.
-      WARP_LICENSE_KEY: ${WARP_LICENSE_KEY}
+      WARP_LICENSE_KEY: $WARP_LICENSE_KEY
       # The time to wait for the WARP daemon to start, in seconds.
       # If the time is too short, it may cause the WARP daemon to not start before using the proxy, resulting in the proxy not working properly.
       # If the time is too long, it may cause the container to take too long to start. If your server has poor performance, you can increase this value appropriately.

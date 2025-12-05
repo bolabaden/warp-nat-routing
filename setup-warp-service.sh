@@ -1,6 +1,6 @@
 
 #!/bin/bash
-set -xe
+set -e
 
 # Defaults (configurable via env)
 DOCKER_HOST="${DOCKER_HOST:-unix:///var/run/docker.sock}"
@@ -12,7 +12,7 @@ CONT_VETH_IP="${CONT_VETH_IP:-169.254.100.2}"
 ROUTING_TABLE="${ROUTING_TABLE:-warp-nat-routing}"
 VETH_HOST="${VETH_HOST:-veth-warp-nat-host}" 
 
-# VETH_CONT is derived from VETH_HOST
+# VETH_CONT is derived from VETH_HOST, so we only need to track VETH_HOST_PROVIDED
 VETH_CONT="${VETH_HOST#veth-}-nat-cont"
 DOCKER="docker -H $DOCKER_HOST"
 DEFAULT_DOCKER_NETWORK_NAME="warp-nat-net"
@@ -273,8 +273,6 @@ ip link set "$VETH_HOST" up
 nsenter -t "$warp_pid" -n ip addr add "$CONT_VETH_IP/30" dev "$VETH_CONT"
 nsenter -t "$warp_pid" -n ip link set "$VETH_CONT" up
 nsenter -t "$warp_pid" -n sysctl -w net.ipv4.ip_forward=1
-#nsenter -t "$warp_pid" -n sysctl -w net.ipv4.conf.all.rp_filter=2
-#nsenter -t "$warp_pid" -n sysctl -w net.ipv4.conf.default.rp_filter=2
 
 # NAT inside warp (add if not exists)
 nsenter -t "$warp_pid" -n iptables -t nat -C POSTROUTING -s "$DOCKER_NET" -j MASQUERADE 2>/dev/null || \

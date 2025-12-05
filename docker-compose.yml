@@ -1,28 +1,59 @@
-
-
+# yaml-language-server: $schema=https://raw.githubusercontent.com/compose-spec/compose-spec/master/schema/compose-spec.json
+# TODO: com.docker.network.bridge.inhibit_ipv4=true
 
 volumes:
   warp-config-data:
-
-
-configs:
-  warp-nat-setup.sh:
-    file: ./warp-nat-setup.sh
-
 
 networks:
   stack-net:
     driver: bridge
   warp-nat-net:
-    external: true  # docker network create --attachable -o com.docker.network.bridge.name=br_warp-nat-net -o com.docker.network.bridge.enable_ip_masquerade=false warp-nat-net
-    attachable: true
+    name: ${DOCKER_NETWORK_NAME:-warp-nat-net}
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.name: br_${DOCKER_NETWORK_NAME:-warp-nat-net}
+      com.docker.network.bridge.enable_ip_masquerade: "false"
+    ipam:
+      config:
+        - subnet: ${WARP_NAT_NET_SUBNET:-10.0.2.0/24}
+          gateway: ${WARP_NAT_NET_GATEWAY:-10.0.2.1}
   publicnet:
     driver: bridge
 
-
 services:
+  warp-net-init:
+    # Creates the warp-nat-net network if it doesn't exist
+    image: docker:cli
+    container_name: warp-net-init
+    network_mode: host
+    command:
+      - sh
+      - -c
+      - |
+        # Create network if it doesn't exist
+        if ! docker network inspect ${DOCKER_NETWORK_NAME:-warp-nat-net} >/dev/null 2>&1; then
+          echo "Creating network ${DOCKER_NETWORK_NAME:-warp-nat-net}..."
+          docker network create \
+            --driver=bridge \
+            --attachable \
+            -o com.docker.network.bridge.name=br_${DOCKER_NETWORK_NAME:-warp-nat-net} \
+            -o com.docker.network.bridge.enable_ip_masquerade=false \
+            --subnet=${WARP_NAT_NET_SUBNET:-10.0.2.0/24} \
+            --gateway=${WARP_NAT_NET_GATEWAY:-10.0.2.1} \
+            ${DOCKER_NETWORK_NAME:-warp-nat-net}
+          echo "Network created successfully"
+        else
+          echo "Network ${DOCKER_NETWORK_NAME:-warp-nat-net} already exists"
+        fi
+    volumes:
+      - ${DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock:ro
+    restart: "no"
+
   warp-nat-gateway:
     # 🔹🔹 WARP in Docker (with NAT)🔹
+    depends_on:
+      warp-net-init:
+        condition: service_completed_successfully
     image: docker.io/caomingjun/warp:latest
     container_name: warp-nat-gateway
     hostname: warp-nat-gateway
@@ -62,7 +93,7 @@ services:
       # If set, will work as warp mode and turn NAT on.
       # You can route L3 traffic through warp-docker to Warp.
       # See https://github.com/cmj2002/warp-docker/blob/main/docs/nat-gateway.md for more information.
-      WARP_ENABLE_NAT: true
+      WARP_ENABLE_NAT: false
       # The license key of the WARP client, which is optional.
       # If you have subscribed to WARP+ service, you can fill in the key in this environment variable.
       # If you have not subscribed to WARP+ service, you can ignore this environment variable.
@@ -81,6 +112,7 @@ services:
       retries: 3
       start_period: 10s
     restart: always
+
   warp_router:
     depends_on:
       warp-nat-gateway:
@@ -89,34 +121,49 @@ services:
       dockerfile_inline: |
         FROM alpine:latest
         RUN apk update && apk add \
-            bash bc docker-cli ipcalc iproute2 iptables jq util-linux && \
+            bash bc curl docker-cli ipcalc iproute2 iptables jq util-linux && \
             rm -rf /var/cache/apk/*
-        CMD ["/bin/bash", "/usr/local/bin/warp-nat-setup.sh"]
     container_name: warp_router
+    # run the monitor wrapper (it will run setup-warp-service.sh ONLY when health check fails)
+    command:
+      - /bin/bash
+      - /usr/local/bin/warp-monitor.sh
     privileged: true
-# unsure if any of these are required or not
-#    cap_add:
-#      - NET_ADMIN
-#      - NET_RAW
-#      - SYS_ADMIN
+    # unsure if any of these are required or not
+    #    cap_add:
+    #      - NET_ADMIN
+    #      - NET_RAW
+    #      - SYS_ADMIN
     network_mode: host
-    configs:
-      - source: warp-nat-setup.sh
-        target: /usr/local/bin/warp-nat-setup.sh
-        mode: 700
+    healthcheck:
+      test: [
+        "CMD-SHELL",
+        'docker run --rm --network ${DOCKER_NETWORK_NAME:-warp-nat-net} --entrypoint sh curlimages/curl -c ''if curl -s --max-time 4 https://cloudflare.com/cdn-cgi/trace | grep -qE "^warp=on|warp=plus$"; then exit 0; else exit 1; fi'''
+      ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:rw
+      - ${DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock:rw
       - /etc/iproute2/rt_tables:/etc/iproute2/rt_tables:rw
       - /proc:/proc:rw
+      # Mount the scripts from the local directory
+      - ./setup-warp-service.sh:/usr/local/bin/setup-warp-service.sh:ro
+      - ./warp-monitor.sh:/usr/local/bin/warp-monitor.sh:ro
     environment:
-      DOCKER_HOST: ${DOCKER_HOST:-unix:///var/run/docker.sock}
       DOCKER_NETWORK_NAME: ${DOCKER_NETWORK_NAME:-warp-nat-net}
       WARP_CONTAINER_NAME: ${WARP_CONTAINER_NAME:-warp-nat-gateway}
       HOST_VETH_IP: ${HOST_VETH_IP:-169.254.100.1}
       CONT_VETH_IP: ${CONT_VETH_IP:-169.254.100.2}
       ROUTING_TABLE: ${ROUTING_TABLE:-warp-nat-routing}
-      VETH_HOST: ${VETH_HOST:-veth-warp}  # 9 character maximum
-    restart: no
+      VETH_HOST: ${VETH_HOST:-veth-warp}  # 9 character maximum (Linux interface name limit is 15)
+      ROUTER_CONTAINER_NAME: ${ROUTER_CONTAINER_NAME:-warp_router}
+      WARP_NAT_NET_SUBNET: ${WARP_NAT_NET_SUBNET:-10.0.2.0/24}
+      WARP_NAT_NET_GATEWAY: ${WARP_NAT_NET_GATEWAY:-10.0.2.1}
+      RETRY_SETUP_AFTER: ${RETRY_SETUP_AFTER:-12}  # retry setup after N consecutive health check failures
+      SLEEP_INTERVAL: ${SLEEP_INTERVAL:-5}  # seconds between health checks
+    restart: always
 
   ip-checker-naked:
     # 🔹🔹 IP Checker Naked 🔹🔹
@@ -128,7 +175,12 @@ services:
         FROM alpine:latest
         RUN apk add --no-cache curl ipcalc
     container_name: ip-checker-naked
-    command: "/bin/sh -c 'while true; do echo \"$$(date): $$(curl -s --max-time 4 ifconfig.me)\"; sleep 5; done'"
+    command:
+      - /bin/sh
+      - -c
+      - |
+        apk add --no-cache curl ipcalc
+        while true; do echo "$(date): $(curl -s --max-time 4 ifconfig.me)"; sleep 5; done
     healthcheck:
       test: [
         "CMD-SHELL",
@@ -138,17 +190,25 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+
   ip-checker-warp:
     # 🔹🔹 IP Checker WARP 🔹🔹
     # This is a service that checks the IP address of the container.
     # It uses the WARP network interface.
-    build: *ip-checker-dockerfile
+    image: docker.io/alpine
     container_name: ip-checker-warp
     networks:
       - warp-nat-net
-    command: "/bin/sh -c 'while true; do echo \"$$(date): $$(curl -s --max-time 4 ifconfig.me)\"; sleep 5; done'"
+    command:
+      - /bin/sh
+      - -c
+      - |
+        apk add --no-cache curl ipcalc
+        while true; do echo "$(date): $(curl -s --max-time 4 ifconfig.me)"; sleep 5; done
+    # End of Selection
     healthcheck: *warp-healthcheck
     restart: always
+
   ip-checker-warp-multi-ambiguous:
     # 🔹🔹 IP Checker WARP Multi Uses Public 🔹🔹
     # This is a service that checks the IP address of the container.
@@ -161,8 +221,14 @@ services:
     networks:
       - warp-nat-net
       - publicnet
-    command: "/bin/sh -c 'while true; do echo \"$$(date): $$(curl -s --max-time 4 ifconfig.me)\"; sleep 5; done'"
+    command:
+      - /bin/sh
+      - -c
+      - |
+        apk add --no-cache curl ipcalc
+        while true; do echo "$(date): $(curl -s --max-time 4 ifconfig.me)"; sleep 5; done
     restart: always
+
   ip-checker-warp-multi-uses-warp:
     # 🔹🔹 IP Checker WARP Multi Uses WARP 🔹🔹
     # This is a service that checks the IP address of the container.
@@ -174,8 +240,14 @@ services:
         # Default gateway is set by the last connected network or by gw_priority (e.g., 100), with Docker using the last network by default unless gw_priority is specified.
         gw_priority: 1  # https://docs.docker.com/engine/network/#connecting-to-multiple-networks
       publicnet: {}
-    command: "/bin/sh -c 'while true; do echo \"$$(date): $$(curl -s --max-time 4 ifconfig.me)\"; sleep 5; done'"
+    command:
+      - /bin/sh
+      - -c
+      - |
+        apk add --no-cache curl ipcalc
+        while true; do echo "$(date): $(curl -s --max-time 4 ifconfig.me)"; sleep 5; done
     healthcheck: *warp-healthcheck
+
   stack-network-checker:
     image: alpine:latest
     container_name: stack-network-checker

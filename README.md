@@ -22,10 +22,62 @@ This project solves these issues by:
 
 - **NAT-based routing** in addition to SOCKS5
 - **Docker network created** that can be assigned to your containers
-- **Configurable network parameters** via environment variables
+- **Fully configurable parameters** via environment variables
 - **Comprehensive validation** for all network configurations
 - **Docker Compose deployment** with health checks and monitoring
 - **Automatic network setup** via init container
+- **Self-healing monitor** - automatically retries setup on failures
+- **Failsafe IP leak protection** - blocks traffic if routing setup fails
+- **Multi-instance support** - run multiple isolated WARP instances
+- **Zero-downtime updates** - non-destructive network management
+- **Dynamic discovery** - no hardcoded values, all parameters auto-detected
+
+## 🆕 Recent Improvements
+
+### Architecture Enhancements
+
+**Non-Destructive Network Management**
+- Old behavior: Forcefully disconnected ALL containers, deleted network, recreated - causing service disruption
+- New behavior: Discovers and uses existing networks without modifications
+- Result: Zero downtime, true idempotency, no container disruption
+
+**Failsafe IP Leak Protection**
+- Implements iptables DROP rules during setup to prevent IP leaks if routing fails
+- Rules are only removed after successful routing configuration
+- Ensures real IP is never exposed even during setup failures
+
+**Self-Healing Monitor**
+- Continuously monitors WARP health via ephemeral container tests
+- Automatically re-runs setup after configurable consecutive failures (default: 12)
+- Prevents tight loops while ensuring eventual recovery
+
+**Dynamic Discovery**
+- No hardcoded bridge names - queries Docker for actual configuration
+- Discovers network names using Compose naming patterns
+- Verifies all discovered resources exist before proceeding
+- Supports both explicit bridge names and Docker's default ID-based names
+
+**Multi-Instance Support**
+- All parameters (network names, routing tables, veth names, IPs) fully configurable
+- Can run multiple independent WARP instances on same host
+- Stack-aware naming prevents conflicts between Compose projects
+- See `warp.env.template` for multi-instance configuration examples
+
+**Surgical Cleanup**
+- Removes only specific routes/rules it manages
+- Checks existence before deletion
+- No bulk operations that could affect other configurations
+- Detailed logging of all changes
+
+### Configuration Improvements
+
+All parameters now configurable via environment variables:
+- Network configuration (subnet, gateway, bridge name)
+- Container names (for multiple instances)
+- Routing parameters (table name, veth names, IPs)
+- Monitoring behavior (retry intervals, sleep times)
+
+See `warp.env.template` for complete list of configurable parameters.
 
 ## 📋 Requirements
 
@@ -33,6 +85,8 @@ This project solves these issues by:
 - **Docker daemon** running
 - **Root privileges** for network operations (when running setup scripts)
 - **`bc` command** for network calculations
+- **`curl` command** for health checks (provided in containers)
+- **`jq` command** for JSON parsing (provided in containers)
 
 ## 🏗️ Architecture
 
@@ -136,13 +190,51 @@ The `warp-nat-setup.sh` script (embedded in the compose file) handles:
 
 ### Environment Variables
 
+#### WARP Configuration
 | Variable | Description | Default | Required |
 |----------|-------------|---------|----------|
-| `WARP_LICENSE_KEY` | WARP Teams license key | (unset) | No |
+| `WARP_LICENSE_KEY` | WARP Teams/WARP+ license key | (unset) | No |
 | `WARP_TUNNEL_TOKEN` | WARP Teams tunnel token | (unset) | No |
 | `GOST_SOCKS5_PORT` | SOCKS5 proxy port | `1080` | No |
 | `GOST_ARGS` | Additional GOST arguments | `-L :1080` | No |
+| `WARP_SLEEP` | WARP daemon startup time (seconds) | `2` | No |
 | `BETA_FIX_HOST_CONNECTIVITY` | Auto-fix host connectivity | `false` | No |
+
+#### Network Configuration
+| Variable | Description | Default | Required |
+|----------|-------------|---------|----------|
+| `DOCKER_NETWORK_NAME` | Docker network name | `warp-nat-net` | No |
+| `WARP_NAT_NET_SUBNET` | Network subnet CIDR | `10.0.2.0/24` | No |
+| `WARP_NAT_NET_GATEWAY` | Network gateway IP | `10.0.2.1` | No |
+
+#### Container Names (for multiple instances)
+| Variable | Description | Default | Required |
+|----------|-------------|---------|----------|
+| `WARP_CONTAINER_NAME` | WARP gateway container name | `warp-nat-gateway` | No |
+| `ROUTER_CONTAINER_NAME` | Router container name | `warp_router` | No |
+
+#### Routing Configuration
+| Variable | Description | Default | Required |
+|----------|-------------|---------|----------|
+| `ROUTING_TABLE` | Custom routing table name | `warp-nat-routing` | No |
+| `HOST_VETH_IP` | Host-side VETH IP address | `169.254.100.1` | No |
+| `CONT_VETH_IP` | Container-side VETH IP address | `169.254.100.2` | No |
+| `VETH_HOST` | VETH interface name (max 9 chars) | `veth-warp` | No |
+
+#### Monitoring Configuration
+| Variable | Description | Default | Required |
+|----------|-------------|---------|----------|
+| `RETRY_SETUP_AFTER` | Consecutive failures before retry | `12` | No |
+| `SLEEP_INTERVAL` | Seconds between health checks | `5` | No |
+| `CHECK_IMAGE` | Docker image for health checks | `curlimages/curl` | No |
+
+#### Docker Configuration
+| Variable | Description | Default | Required |
+|----------|-------------|---------|----------|
+| `DOCKER_SOCKET` | Docker socket path | `/var/run/docker.sock` | No |
+| `DOCKER_HOST` | Docker host URL | `unix:///var/run/docker.sock` | No |
+
+For complete configuration examples including multi-instance setups, see `warp.env.template`.
 
 ## 🔧 Service Management
 
@@ -242,6 +334,60 @@ docker run --rm \
   --network public \
   alpine:latest sh -c "curl -s ifconfig.me"
 ```
+
+### Running Multiple WARP Instances
+
+You can run multiple independent WARP instances on the same host for different purposes:
+
+```bash
+# Instance 1: US West Region (example)
+cat > .env.warp1 << EOF
+DOCKER_NETWORK_NAME=warp-nat-net-1
+WARP_CONTAINER_NAME=warp-nat-gateway-1
+ROUTER_CONTAINER_NAME=warp_router_1
+ROUTING_TABLE=warp-nat-routing-1
+VETH_HOST=veth-wrp1
+HOST_VETH_IP=169.254.101.1
+CONT_VETH_IP=169.254.101.2
+WARP_NAT_NET_SUBNET=10.0.3.0/24
+WARP_NAT_NET_GATEWAY=10.0.3.1
+WARP_LICENSE_KEY=license_key_1
+EOF
+
+# Start instance 1
+docker-compose --env-file .env.warp1 -p warp1 up -d
+
+# Instance 2: EU Region (example)
+cat > .env.warp2 << EOF
+DOCKER_NETWORK_NAME=warp-nat-net-2
+WARP_CONTAINER_NAME=warp-nat-gateway-2
+ROUTER_CONTAINER_NAME=warp_router_2
+ROUTING_TABLE=warp-nat-routing-2
+VETH_HOST=veth-wrp2
+HOST_VETH_IP=169.254.102.1
+CONT_VETH_IP=169.254.102.2
+WARP_NAT_NET_SUBNET=10.0.4.0/24
+WARP_NAT_NET_GATEWAY=10.0.4.1
+WARP_LICENSE_KEY=license_key_2
+EOF
+
+# Start instance 2
+docker-compose --env-file .env.warp2 -p warp2 up -d
+
+# Test each instance
+docker run --rm --network warp-nat-net-1 alpine sh -c "curl -s ifconfig.me"
+docker run --rm --network warp-nat-net-2 alpine sh -c "curl -s ifconfig.me"
+
+# Stop specific instance
+docker-compose --env-file .env.warp1 -p warp1 down
+```
+
+**Key Points for Multi-Instance Setup:**
+- Each instance must have unique: network name, container names, routing table, veth name, IPs, subnet
+- VETH interface names must be ≤15 characters (Linux limit)
+- IP subnets must not overlap
+- VETH IP addresses must be in different /30 subnets
+- Each instance operates completely independently with its own routing
 
 ## 🐛 Troubleshooting
 
